@@ -97,7 +97,26 @@ pipeline {
 	 }
      }
    }
-
+stage('Stage Artifacts') 
+  {          
+   agent { label 'demo' }
+   when {environment name: 'BUILDME', value: 'yes'}
+   steps {          
+    script { 
+	    /* Define the Artifactory Server details */
+        def server = Artifactory.server 'defaultjfrog'
+        def uploadSpec = """{
+            "files": [{
+            "pattern": "samplewar/target/samplewar.war", 
+            "target": "Demo"                   
+            }]
+        }"""
+        
+        /* Upload the war to  Artifactory repo */
+        server.upload(uploadSpec)
+    }
+   }
+  }
 
  }
 }
