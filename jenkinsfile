@@ -2,21 +2,24 @@ pipeline {
   agent none
   options {
      timeout(time: 1, unit: 'HOURS')
-   }
+  }
   parameters {
     booleanParam(name: 'UNITTEST', defaultValue: true, description: 'Enable UnitTests ?')
     booleanParam(name: 'CODEANALYSIS', defaultValue: true, description: 'Enable CODE-ANALYSIS ?')
-  }
-
-
+    string(name: 'ECRURL', defaultValue: '052807230865.dkr.ecr.ap-south-1.amazonaws.com', description: 'Please Enter your Docker ECR REGISTRY URL without https?')
+    string(name: 'BASEREPO', defaultValue: 'wezvabaseimage', description: 'Please Enter your Docker Base Repo Name?')
+    string(name: 'APPREPO', defaultValue: 'wezvawebapp', description: 'Please Enter your Docker App Repo Name?')
+    string(name: 'REGION', defaultValue: 'ap-south-1', description: 'Please Enter your AWS Region?')
+   }
  stages {
   stage('Checkout')
   {
-       agent { label 'demo' }
-       steps { 
-          git credentialsId: 'GitlabCred', url: 'https://gitlab.com/scmlearningcentre/wezvatech-cicd.git'
-       }
+    agent { label 'demo' }
+    steps { 
+     git credentialsId: 'GitlabCred', url: 'https://gitlab.com/scmlearningcentre/wezvatech-cicd.git'
+    }
   }
+
   stage('PreCheck')
   {
    agent { label 'demo' }
@@ -37,25 +40,25 @@ pipeline {
     when {environment name: 'BUILDME', value: 'yes'}
     agent { label 'demo' }
     steps { 
-     script {
+        script {
 	    if (params.UNITTEST) {
 		  unitstr = ""
 	    } else {
 		  unitstr = "-Dmaven.test.skip=true"
 	    }
 	
-		echo "Building Jar Component ..."
-		dir ("./samplejar") {
-		   sh "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64; mvn clean package ${unitstr}"
-		}
+            echo "Building Jar Component ..."
+	    dir ("./samplejar") {
+	      sh "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64; mvn clean package ${unitstr}"
+	    }
 
-		echo "Building War Component ..."
-		dir ("./samplewar") {
-           sh "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64; mvn clean package "
-		}
+            echo "Building War Component ..."
+	    dir ("./samplewar") {
+             sh "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64; mvn clean package "
+	    }
 	 }
+    }
    }
-  }
   stage('Code Coverage')
   {
    agent { label 'demo' }
@@ -67,17 +70,18 @@ pipeline {
    }
    steps {
      echo "Running Code Coverage ..."  
-	 dir ("./samplejar") {
-	   sh "mvn org.jacoco:jacoco-maven-plugin:0.5.5.201112152213:prepare-agent"
-	 }
+     dir ("./samplejar") {
+	sh "mvn org.jacoco:jacoco-maven-plugin:0.5.5.201112152213:prepare-agent"
+     }
    }
   }
+
   stage('SonarQube Analysis') 
   {
     agent { label 'demo' }
     when {environment name: 'BUILDME', value: 'yes'}
     steps{
-     withSonarQubeEnv('defaultsonarqube') {
+     withSonarQubeEnv('demosonarqube') {
 	  dir ("./samplejar") {
              sh 'mvn sonar:sonar'
 	  }
@@ -97,7 +101,8 @@ pipeline {
 	 }
      }
    }
-stage('Stage Artifacts') 
+
+  stage('Stage Artifacts') 
   {          
    agent { label 'demo' }
    when {environment name: 'BUILDME', value: 'yes'}
@@ -108,7 +113,7 @@ stage('Stage Artifacts')
         def uploadSpec = """{
             "files": [{
             "pattern": "samplewar/target/samplewar.war", 
-            "target": "Demo"                   
+            "target": "DEMOCI"                   
             }]
         }"""
         
@@ -117,38 +122,69 @@ stage('Stage Artifacts')
     }
    }
   }
- stage('Build Image') 
+
+  stage('Build Image') 
   {
     agent { label 'demo' }
-    when {environment name: 'BUILDME', value: 'yes'}
     steps{
       script {
-          docker.withRegistry( 'https://registry.hub.docker.com', 'dockerhubcred' ) {
+	  // Prepare the Tag name for the Image
+	  AppTag = params.APPREPO + ":" + env.BUILD_ID
+          BaseTag = params.ECRURL + "/" + params.BASEREPO
+          // Docker login needs https appended 
+	  ECR = "https://" + params.ECRURL
+          docker.withRegistry( ECR, 'ecr:ap-south-1:AWSCred' ) {
              /* Build Docker Image locally */
-             myImage = docker.build("adamtravis/wezvacicd:latest")
-
-             /* Push the container to the Registry */
+             myImage = docker.build(AppTag, "--build-arg BASEIMAGE=${BaseTag} .")
+             /* Push the Image to the Registry */
              myImage.push()
           }
       }
     }
   }
-  stage ('Deploy'){
-    agent {label 'demo'}
-    when {environment name: 'BUILDME', value: 'yes'}
-    steps {
-        git credentialsId: 'GitlabCred', url: 'https://gitlab.com/scmlearningcentre/wezvatech-cicd.git'
-        step([$class: 'DockerComposeBuilder', dockerComposeFile: 'docker-compose.yml', option: [$class: 'StartAllServices'], useCustomDockerComposeFile: false])
-    }          
+
+  stage ('Scan Image')
+  {
+    agent { label 'demo' }
+	steps {
+	  withAWS(credentials:'AWSCred') {
+	   sh "chmod +x getimagescan.sh; ./getimagescan.sh ${params.APPREPO} ${env.BUILD_ID} ${params.REGION}"
+	  }
+	}
   }
-  stage ('Smoke Test'){
+
+   stage ('Deploy'){
     agent {label 'demo'}
     when {environment name: 'BUILDME', value: 'yes'}
     steps {
-      catchError(buildResult: 'SUCCESS', message: 'TEST-CASES FAILED', stageResult: 'UNSTABLE')) {
+      script {
+        env.DEPLOYIMAGE = params.APPREPO + ":" + env.BUILD_ID
+        // Create Containers using the recent Build Image
+        sh ("export DEPLOYIMAGE=${DEPLOYIMAGE}; docker-compose up -d")
+      }          
+   }
+
+ stage ('Smoke Test'){
+    agent {label 'demo'}
+    when {environment name: 'BUILDME', value: 'yes'}
+    steps {
+      catchError(buildResult: 'SUCCESS', message: 'TEST-CASES FAILED', stageResult: 'UNSTABLE')
+      {
          sh "sleep 10; chmod +x runsmokes.sh; ./runsmokes.sh"
       }
-    }      
+    }
+     post {
+     always {
+      script {
+        env.DEPLOYIMAGE = params.APPREPO + ":" + env.BUILD_ID
+        // Create Containers using the recent Build Image
+        sh ("export DEPLOYIMAGE=${DEPLOYIMAGE}; docker-compose down")
+        sh ("docker rmi ${params.APPREPO}:${env.BUILD_ID}")
+       }   
+    }
   }
+  }
+
+
  }
 }
