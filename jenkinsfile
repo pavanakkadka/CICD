@@ -10,6 +10,7 @@ pipeline {
     string(name: 'BASEREPO', defaultValue: 'wezvabaseimage', description: 'Please Enter your Docker Base Repo Name?')
     string(name: 'APPREPO', defaultValue: 'wezvawebapp', description: 'Please Enter your Docker App Repo Name?')
     string(name: 'REGION', defaultValue: 'ap-south-1', description: 'Please Enter your AWS Region?')
+    password(name: 'PASSWD', defaultValue: '', description: 'Please Enter your Gitlab password')
    }
  stages {
   stage('Checkout')
@@ -185,6 +186,16 @@ pipeline {
   }
   }
 
+  stage ('Trigger CD'){
+    agent {label 'demo'}
+    when {environment name: 'BUILDME', value: 'yes'}
+    steps {
+	   script {
+	     TAG = '\\/' + params.APPREPO + ":" + env.BUILD_ID
+		 build job: 'DeployBuild', parameters: [string(name: 'IMAGE', value: TAG), password(name: 'PASSWD', value: params.PASSWD)]
+       }
+    }
+  }
 
  }
 }
