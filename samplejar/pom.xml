@@ -87,6 +87,12 @@
                       </goals>
                   </execution>
               </executions>
+             <configuration>
+                 <formats>
+                 <format>json</format>
+                 <format>html</format>
+                 </formats>
+             </configuration>
  </plugin>
 </plugins>
 </build>
